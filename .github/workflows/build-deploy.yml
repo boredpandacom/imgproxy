@@ -1,0 +1,84 @@
+# Drop this into the boredpandacom/imgproxy repo at
+# .github/workflows/build-deploy.yml
+#
+# Builds the imgproxy image from that repo's Dockerfile, pushes it to the
+# `imgproxy` ECR repository (created by boredpanda-vibe's Terraform), and
+# triggers a rolling redeploy of the imgproxy ECS services.
+#
+# Required repo secret:
+#   AWS_ROLE_ARN = <output imgproxy_ci_role_arn from terraform>
+name: Build & Deploy imgproxy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: imgproxy
+  ECS_CLUSTER: boredpanda
+
+permissions:
+  id-token: write # required for OIDC
+  contents: read
+
+jobs:
+  build:
+    name: Build & push
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --cache-from "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            --tag "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            --tag "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+  # The ECS task definitions pin the :latest tag and Terraform ignores
+  # task_definition changes, so a force-new-deployment is what actually ships a
+  # freshly pushed image. Both envs run the same env-agnostic binary.
+  deploy:
+    name: Redeploy (${{ matrix.env }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [staging, production]
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new deployment
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "imgproxy-${{ matrix.env }}" \
+            --force-new-deployment \
+            --query 'service.serviceName' --output text
