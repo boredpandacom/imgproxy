@@ -11,7 +11,7 @@ name: Build & Deploy imgproxy
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 env:
@@ -33,13 +33,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Print OIDC subject
-        run: |
-          TOKEN=$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
-          echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{sub, aud, repository, ref}'
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -57,6 +50,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
+            -f docker/Dockerfile \
             --cache-from "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
             --tag "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             --tag "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
