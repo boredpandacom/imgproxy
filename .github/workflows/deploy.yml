@@ -1,12 +1,12 @@
-# Builds the imgproxy image from this repo's Dockerfile for linux/amd64 and
-# linux/arm64, pushes it to the `imgproxy` ECR repository (created by
-# boredpanda-vibe's Terraform) as one multi-architecture image, and triggers a
-# rolling redeploy of the imgproxy ECS services.
+# Builds the imgproxy image from this repo's Dockerfile for linux/arm64, pushes
+# it to the `imgproxy` ECR repository (created by boredpanda-vibe's Terraform),
+# and triggers a rolling redeploy of the imgproxy ECS services.
 #
+# The services run on ARM64 (Graviton) Fargate since 2026-11-07
+# (imgproxy_cpu_architecture in boredpanda-vibe). To run x86 again, add the
+# amd64 matrix entry and its manifest source back before switching Terraform.
 # Each architecture builds natively on its own runner (cgo + libvips under
-# QEMU emulation would take far longer). The ECS task definition's
-# runtime_platform (imgproxy_cpu_architecture in boredpanda-vibe) picks which
-# variant Fargate pulls.
+# QEMU emulation would take far longer).
 #
 # Required repo secret:
 #   AWS_ROLE_ARN = <output imgproxy_ci_role_arn from terraform>
@@ -32,8 +32,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: amd64
-            runner: ubuntu-latest
+          # - arch: amd64
+          #   runner: ubuntu-latest
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -67,7 +67,8 @@ jobs:
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$CACHE_TAG"
 
-  # Joins the per-architecture images into one multi-architecture tag.
+  # Publishes the per-architecture images as one tag (an index, so adding
+  # amd64 back only needs another source here).
   manifest:
     name: Publish multi-arch image
     needs: build
@@ -97,7 +98,6 @@ jobs:
           docker buildx imagetools create \
             --tag "$REPO:$SHA" \
             --tag "$REPO:latest" \
-            "$REPO:$SHA-amd64" \
             "$REPO:$SHA-arm64"
           docker buildx imagetools inspect "$REPO:latest"
           echo "image=$REPO:$SHA" >> "$GITHUB_OUTPUT"
